@@ -263,22 +263,42 @@ ollama pull qwen2.5:7b
 
 ### Step 4: Configure Infrastructure
 
-Edit `infra/lib/backend.ts`:
+**Option A: Using cdk.json (Recommended)**
 
-1. **Update Instance ID** (line 28):
-   ```typescript
-   INSTANCE_ID: 'i-077950cffe484e6de',  // Replace with your instance ID
+1. Copy the example configuration:
+   ```bash
+   cp infra/cdk.json.example infra/cdk.json
    ```
 
-2. **Update Admin Email** (line 29):
-   ```typescript
-   ADMIN_EMAILS: 'your-email@example.com',  // Your admin email
+2. Edit `infra/cdk.json` and fill in your values:
+   ```json
+   {
+     "context": {
+       "auth0Domain": "your-tenant.auth0.com",
+       "auth0ClientId": "your_client_id_here",
+       "auth0Audience": "ollama-chat-api",
+       "instanceId": "i-xxxxxxxxxxxxx",
+       "adminEmails": "your-admin@email.com",
+       "budgetEmail": "your-email@email.com",
+       "monthlyBudgetUsd": "10"
+     }
+   }
    ```
 
-3. **Update Auth0 Domain** (line 26):
-   ```typescript
-   AUTH0_DOMAIN: 'your-tenant.us.auth0.com',  // Your Auth0 domain
-   ```
+**Option B: Using Environment Variables**
+
+Set these environment variables before deploying:
+```bash
+export AUTH0_DOMAIN=your-tenant.auth0.com
+export AUTH0_CLIENT_ID=your_client_id_here
+export AUTH0_AUDIENCE=ollama-chat-api
+export INSTANCE_ID=i-xxxxxxxxxxxxx
+export ADMIN_EMAILS=your-admin@email.com
+export BUDGET_EMAIL=your-email@email.com
+export MONTHLY_BUDGET_USD=10
+```
+
+**⚠️ Important**: Never commit `infra/cdk.json` with your actual values to a public repository.
 
 ### Step 5: Build Backend
 

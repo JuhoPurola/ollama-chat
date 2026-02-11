@@ -7,4 +7,5 @@ dist/
 !postcss.config.js
 !esbuild.config.mjs
 .env
+*.local
 cdk.out/

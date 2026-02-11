@@ -1,0 +1,15 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "auth0Domain": "your-tenant.auth0.com",
+    "auth0ClientId": "your_client_id_here",
+    "auth0Audience": "ollama-chat-api",
+    "instanceId": "i-xxxxxxxxxxxxx",
+    "adminEmails": "your-admin@email.com",
+    "budgetEmail": "your-email@email.com",
+    "monthlyBudgetUsd": "10",
+    "cloudFrontUrl": ""
+  }
+}
