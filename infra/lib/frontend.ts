@@ -47,16 +47,16 @@ export class FrontendStack extends cdk.Stack {
     // Grant read permissions to CloudFront
     bucket.grantRead(originAccessIdentity);
 
-    // Build CSP connect-src with actual Lambda URLs
+    // Build CSP with proper Auth0 support
     const lambdaUrls = Object.values(functionUrls).map(url => url.url);
     const connectSrc = [
       "'self'",
       'https://*.auth0.com',
-      'https://*.lambda-url.eu-west-1.on.aws', // All Lambda URLs in eu-west-1
-      ...lambdaUrls // Include specific URLs as backup
+      'https://*.lambda-url.eu-west-1.on.aws',
+      ...lambdaUrls
     ].join(' ');
 
-    // Create security headers policy
+    // Security headers policy with CSP
     const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
       this,
       'SecurityHeadersPolicy',
@@ -66,11 +66,12 @@ export class FrontendStack extends cdk.Stack {
           contentSecurityPolicy: {
             contentSecurityPolicy:
               "default-src 'self'; " +
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " + // React requires unsafe-eval
-              "style-src 'self' 'unsafe-inline'; " + // Tailwind requires unsafe-inline
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+              "style-src 'self' 'unsafe-inline'; " +
               "img-src 'self' data: https:; " +
               "font-src 'self' data:; " +
               `connect-src ${connectSrc}; ` +
+              "frame-src 'self' https://*.auth0.com; " + // Allow Auth0 iframes
               "frame-ancestors 'none'; " +
               "base-uri 'self'; " +
               "form-action 'self'",
@@ -85,15 +86,13 @@ export class FrontendStack extends cdk.Stack {
           contentTypeOptions: {
             override: true,
           },
-          frameOptions: {
-            frameOption: cloudfront.HeadersFrameOption.DENY,
-            override: true,
-          },
           xssProtection: {
             protection: true,
             modeBlock: true,
             override: true,
           },
+          // Note: Not setting frameOptions (X-Frame-Options) as it conflicts with CSP frame-src
+          // CSP frame-src provides more granular control
           referrerPolicy: {
             referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
             override: true,
