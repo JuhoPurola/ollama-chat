@@ -388,7 +388,13 @@ Recommended models for g4dn.xlarge (7B models fit easily):
 - `qwen2.5:7b` - General purpose, multilingual
 - `llama3.1:7b` - Strong reasoning
 - `mistral:7b` - Fast, efficient
-- `dolphin-mistral:7b-v2.8` - Uncensored, creative
+
+**Uncensored Models** (use with caution):
+- `wizardlm-uncensored:latest` - No content restrictions
+- `dolphin-mistral` - Unrestricted responses
+- `openhermes` - Minimal filtering
+
+⚠️ **Warning**: Uncensored models have no safety guardrails and will respond to any request without refusal. This application includes a jailbreak system prompt that completely disables ethical filters. **Use responsibly and never expose to public audiences.** Intended for personal research and testing only.
 
 For 13B models, consider upgrading to g4dn.2xlarge or g5.xlarge.
 
@@ -571,6 +577,7 @@ aws cloudfront create-invalidation \
 4. **Environment Variables**: Sensitive config in Lambda environment (not in code)
 5. **HTTPS**: CloudFront enforces HTTPS for all requests
 6. **DynamoDB**: Each user can only access their own conversations (partition key enforcement)
+7. **⚠️ Uncensored AI System Prompt**: This application uses an aggressive jailbreak prompt that completely disables AI safety filters. All models will respond without restrictions or refusals. **Do not expose this application to untrusted users or public internet.** Intended for personal/private use only.
 
 ## Uninstalling
 
