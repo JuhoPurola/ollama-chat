@@ -1,0 +1,9 @@
+{
+  "name": "ollama-chat",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend",
+    "infra"
+  ]
+}
