@@ -59,11 +59,12 @@ export class BackendStack extends cdk.Stack {
     table.grantReadWriteData(chatFn);
 
     // Grant EC2 permissions for instance IP resolution
+    // Note: DescribeInstances doesn't support resource-level permissions
     chatFn.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ec2:DescribeInstances'],
-        resources: [instanceArn],
+        resources: ['*'],
       })
     );
 
@@ -118,11 +119,12 @@ export class BackendStack extends cdk.Stack {
     table.grantReadWriteData(modelsFn);
 
     // Grant EC2 permissions for instance IP resolution
+    // Note: DescribeInstances doesn't support resource-level permissions
     modelsFn.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ec2:DescribeInstances'],
-        resources: [instanceArn],
+        resources: ['*'],
       })
     );
 
@@ -151,11 +153,12 @@ export class BackendStack extends cdk.Stack {
     table.grantReadWriteData(instanceFn);
 
     // Grant EC2 permissions for instance management (least privilege)
+    // Note: DescribeInstances doesn't support resource-level permissions
     instanceFn.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ec2:DescribeInstances'],
-        resources: [instanceArn],
+        resources: ['*'],
       })
     );
     instanceFn.addToRolePolicy(
@@ -225,11 +228,12 @@ export class BackendStack extends cdk.Stack {
     });
 
     table.grantReadData(autostopFn);
+    // Note: DescribeInstances doesn't support resource-level permissions
     autostopFn.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ec2:DescribeInstances'],
-        resources: [instanceArn],
+        resources: ['*'],
       })
     );
     autostopFn.addToRolePolicy(
