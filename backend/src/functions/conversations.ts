@@ -1,7 +1,9 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getAuthUser } from '../lib/auth.js';
+import { checkRateLimit, createRateLimitResponse } from '../lib/rateLimit.js';
 import {
   listConversations,
+  getConversation,
   getMessages,
   putConversation,
   deleteConversation,
@@ -11,6 +13,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
   try {
     // Verify authentication
     const user = await getAuthUser(event);
+
+    // Check rate limit
+    const rateLimit = await checkRateLimit(user.sub, 'conversations');
+    if (!rateLimit.allowed) {
+      return createRateLimitResponse(rateLimit);
+    }
+
     const method = event.requestContext.http.method;
 
     // GET / - List conversations
@@ -26,6 +35,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // GET /?id=xxx - Get messages for a conversation
     if (method === 'GET' && event.queryStringParameters?.id) {
       const conversationId = event.queryStringParameters.id;
+
+      // Verify conversation ownership (IDOR protection)
+      const conversation = await getConversation(user.sub, conversationId);
+      if (!conversation) {
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: 'Conversation not found' }),
+        };
+      }
+
       const messages = await getMessages(user.sub, conversationId);
       return {
         statusCode: 200,
@@ -64,6 +84,17 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
     // DELETE /?id=xxx - Delete conversation
     if (method === 'DELETE' && event.queryStringParameters?.id) {
       const conversationId = event.queryStringParameters.id;
+
+      // Verify conversation ownership (IDOR protection)
+      const conversation = await getConversation(user.sub, conversationId);
+      if (!conversation) {
+        return {
+          statusCode: 404,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: 'Conversation not found' }),
+        };
+      }
+
       await deleteConversation(user.sub, conversationId);
       return {
         statusCode: 200,

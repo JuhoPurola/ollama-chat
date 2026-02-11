@@ -3,9 +3,9 @@ import {
   DynamoDBDocumentClient,
   QueryCommand,
   PutCommand,
-  DeleteCommand,
-  UpdateCommand,
   BatchWriteCommand,
+  GetCommand,
+  UpdateCommand,
   ScanCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { ConversationRecord, MessageRecord, ConversationRecordWithUser } from '../types.js';
@@ -35,6 +35,27 @@ export async function listConversations(userId: string): Promise<ConversationRec
   return conversations;
 }
 
+/**
+ * Get a single conversation by ID to verify ownership
+ * Returns null if conversation doesn't exist or doesn't belong to user
+ */
+export async function getConversation(
+  userId: string,
+  conversationId: string
+): Promise<ConversationRecord | null> {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        PK: `USER#${userId}`,
+        SK: `CONV#${conversationId}`,
+      },
+    })
+  );
+
+  return result.Item as ConversationRecord || null;
+}
+
 export async function getMessages(
   userId: string,
   conversationId: string
@@ -47,6 +68,7 @@ export async function getMessages(
         ':pk': `USER#${userId}`,
         ':sk': `CONV#${conversationId}#MSG#`,
       },
+      ScanIndexForward: true, // Sort by timestamp ascending
     })
   );
 
@@ -55,24 +77,22 @@ export async function getMessages(
 
 export async function putConversation(
   userId: string,
-  conv: { id: string; title: string; model: string; email?: string }
+  conversation: { id: string; title: string; model: string; email?: string }
 ): Promise<void> {
-  const now = new Date().toISOString();
-
-  const item: Record<string, any> = {
-    PK: `USER#${userId}`,
-    SK: `CONV#${conv.id}`,
-    id: conv.id,
-    title: conv.title,
-    model: conv.model,
-    updatedAt: now,
-  };
-  if (conv.email) item.email = conv.email;
-
   await docClient.send(
     new PutCommand({
       TableName: TABLE_NAME,
-      Item: item,
+      Item: {
+        PK: `USER#${userId}`,
+        SK: `CONV#${conversation.id}`,
+        id: conversation.id,
+        title: conversation.title,
+        model: conversation.model,
+        email: conversation.email,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        itemType: 'CONVERSATION',  // For GSI query
+      },
     })
   );
 }
@@ -80,65 +100,71 @@ export async function putConversation(
 export async function putMessage(
   userId: string,
   conversationId: string,
-  msg: { role: 'user' | 'assistant' | 'system'; content: string; timestamp: string }
+  message: { role: 'user' | 'assistant' | 'system'; content: string; timestamp: string }
 ): Promise<void> {
   await docClient.send(
     new PutCommand({
       TableName: TABLE_NAME,
       Item: {
         PK: `USER#${userId}`,
-        SK: `CONV#${conversationId}#MSG#${msg.timestamp}`,
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        conversationId,
+        SK: `CONV#${conversationId}#MSG#${message.timestamp}`,
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
       },
     })
   );
 }
 
-export async function deleteConversation(
-  userId: string,
-  conversationId: string
-): Promise<void> {
-  // First, get all messages for this conversation
+export async function deleteConversation(userId: string, conversationId: string): Promise<void> {
+  // Get all messages for the conversation
   const messages = await getMessages(userId, conversationId);
-  
-  // Batch delete messages
-  if (messages.length > 0) {
-    const chunks = [];
-    for (let i = 0; i < messages.length; i += 25) {
-      chunks.push(messages.slice(i, i + 25));
-    }
-    
-    for (const chunk of chunks) {
-      await docClient.send(
-        new BatchWriteCommand({
-          RequestItems: {
-            [TABLE_NAME]: chunk.map((msg) => ({
-              DeleteRequest: {
-                Key: {
-                  PK: msg.PK,
-                  SK: msg.SK,
-                },
-              },
-            })),
-          },
-        })
-      );
+
+  // Delete conversation and all messages in batches
+  const itemsToDelete = [
+    { PK: `USER#${userId}`, SK: `CONV#${conversationId}` },
+    ...messages.map((msg) => ({
+      PK: `USER#${userId}`,
+      SK: `CONV#${conversationId}#MSG#${msg.timestamp}`,
+    })),
+  ];
+
+  // DynamoDB BatchWrite can handle max 25 items at a time
+  const chunks: Array<Array<{ PK: string; SK: string }>> = [];
+  for (let i = 0; i < itemsToDelete.length; i += 25) {
+    chunks.push(itemsToDelete.slice(i, i + 25));
+  }
+
+  for (const chunk of chunks) {
+    const command = new BatchWriteCommand({
+      RequestItems: {
+        [TABLE_NAME]: chunk.map((item) => ({
+          DeleteRequest: { Key: { PK: item.PK, SK: item.SK } },
+        })),
+      },
+    });
+
+    const result = await docClient.send(command);
+
+    // Handle unprocessed items (retry with exponential backoff)
+    if (result.UnprocessedItems && Object.keys(result.UnprocessedItems).length > 0) {
+      let unprocessed = result.UnprocessedItems;
+      let retries = 0;
+      const maxRetries = 3;
+
+      while (Object.keys(unprocessed).length > 0 && retries < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retries) * 100));
+        const retryResult = await docClient.send(new BatchWriteCommand({ RequestItems: unprocessed }));
+        unprocessed = retryResult.UnprocessedItems || {};
+        retries++;
+      }
+
+      if (Object.keys(unprocessed).length > 0) {
+        console.error('Failed to delete some items after retries:', unprocessed);
+        throw new Error('Failed to delete all conversation items');
+      }
     }
   }
-  
-  // Delete conversation metadata
-  await docClient.send(
-    new DeleteCommand({
-      TableName: TABLE_NAME,
-      Key: {
-        PK: `USER#${userId}`,
-        SK: `CONV#${conversationId}`,
-      },
-    })
-  );
 }
 
 export async function updateHeartbeat(): Promise<void> {
@@ -154,18 +180,18 @@ export async function updateHeartbeat(): Promise<void> {
   );
 }
 
-export async function getHeartbeat(): Promise<string | null> {
+export async function getHeartbeat(): Promise<{ timestamp: string } | null> {
   const result = await docClient.send(
-    new QueryCommand({
+    new GetCommand({
       TableName: TABLE_NAME,
-      KeyConditionExpression: 'PK = :pk AND SK = :sk',
-      ExpressionAttributeValues: {
-        ':pk': 'SYSTEM',
-        ':sk': 'HEARTBEAT',
+      Key: {
+        PK: 'SYSTEM',
+        SK: 'HEARTBEAT',
       },
     })
   );
-  return result.Items?.[0]?.timestamp || null;
+
+  return result.Item as { timestamp: string } | null;
 }
 
 export async function updateConversationTitle(
@@ -173,8 +199,6 @@ export async function updateConversationTitle(
   conversationId: string,
   title: string
 ): Promise<void> {
-  const now = new Date().toISOString();
-
   await docClient.send(
     new UpdateCommand({
       TableName: TABLE_NAME,
@@ -185,28 +209,29 @@ export async function updateConversationTitle(
       UpdateExpression: 'SET title = :title, updatedAt = :updatedAt',
       ExpressionAttributeValues: {
         ':title': title,
-        ':updatedAt': now,
+        ':updatedAt': new Date().toISOString(),
       },
     })
   );
 }
 
-// Admin functions for cross-user access
+// Admin functions
 
 export async function getAllConversationsWithUsers(): Promise<ConversationRecordWithUser[]> {
+  // Use GSI for efficient query instead of Scan
   const result = await docClient.send(
-    new ScanCommand({
+    new QueryCommand({
       TableName: TABLE_NAME,
-      FilterExpression: 'begins_with(SK, :sk) AND NOT contains(SK, :msg)',
+      IndexName: 'ConversationsIndex',
+      KeyConditionExpression: 'itemType = :type',
       ExpressionAttributeValues: {
-        ':sk': 'CONV#',
-        ':msg': '#MSG#',
+        ':type': 'CONVERSATION',
       },
+      ScanIndexForward: false,  // Sort by updatedAt descending (newest first)
     })
   );
 
   const conversations = (result.Items || []).map((item) => {
-    // Extract userId from PK (format: USER#{userId})
     const userId = item.PK.replace('USER#', '');
     return {
       ...item,
@@ -222,7 +247,6 @@ export async function getMessagesAdmin(
   userId: string,
   conversationId: string
 ): Promise<MessageRecord[]> {
-  // Same as getMessages but explicit about admin access
   return getMessages(userId, conversationId);
 }
 
@@ -230,6 +254,5 @@ export async function deleteConversationAdmin(
   userId: string,
   conversationId: string
 ): Promise<void> {
-  // Same as deleteConversation but explicit about admin access
   return deleteConversation(userId, conversationId);
 }

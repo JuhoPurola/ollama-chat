@@ -9,6 +9,7 @@ import { Construct } from 'constructs';
 
 interface BackendStackProps extends cdk.StackProps {
   table: dynamodb.Table;
+  allowedOrigins?: string[];
 }
 
 export class BackendStack extends cdk.Stack {
@@ -17,17 +18,30 @@ export class BackendStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: BackendStackProps) {
     super(scope, id, props);
 
-    const { table } = props;
+    const { table, allowedOrigins = ['*'] } = props;
     const backendDist = path.join(__dirname, '../../backend/dist');
+
+    // Get configuration from CDK context or environment variables
+    const auth0Domain = this.node.tryGetContext('auth0Domain') || process.env.AUTH0_DOMAIN;
+    const auth0Audience = this.node.tryGetContext('auth0Audience') || process.env.AUTH0_AUDIENCE;
+    const instanceId = this.node.tryGetContext('instanceId') || process.env.INSTANCE_ID;
+    const adminEmails = this.node.tryGetContext('adminEmails') || process.env.ADMIN_EMAILS;
+
+    if (!auth0Domain || !auth0Audience || !instanceId || !adminEmails) {
+      throw new Error('Missing required configuration. Set in cdk.json context or environment variables.');
+    }
 
     // Common environment variables for all functions
     const commonEnv = {
       TABLE_NAME: table.tableName,
-      AUTH0_DOMAIN: 'ollama-purolaj.eu.auth0.com',
-      AUTH0_AUDIENCE: 'ollama-chat-api',
-      INSTANCE_ID: 'i-077950cffe484e6de',
-      ADMIN_EMAILS: 'juhopuro@gmail.com',
+      AUTH0_DOMAIN: auth0Domain,
+      AUTH0_AUDIENCE: auth0Audience,
+      INSTANCE_ID: instanceId,
+      ADMIN_EMAILS: adminEmails,
     };
+
+    // Construct instance ARN for IAM policies (least privilege)
+    const instanceArn = `arn:aws:ec2:${this.region}:${this.account}:instance/${instanceId}`;
 
     // Chat function with streaming support
     const chatFn = new lambda.Function(this, 'ChatFunction', {
@@ -38,6 +52,7 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.minutes(5),
       description: 'Streaming chat function for Ollama integration',
+      reservedConcurrentExecutions: 10, // Max 10 simultaneous chat sessions
     });
 
     // Grant DynamoDB permissions
@@ -48,7 +63,7 @@ export class BackendStack extends cdk.Stack {
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ec2:DescribeInstances'],
-        resources: ['*'],
+        resources: [instanceArn],
       })
     );
 
@@ -57,9 +72,10 @@ export class BackendStack extends cdk.Stack {
       authType: lambda.FunctionUrlAuthType.NONE,
       invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
       cors: {
-        allowedOrigins: ['*'],
+        allowedOrigins: allowedOrigins,
         allowedHeaders: ['Authorization', 'Content-Type'],
         allowedMethods: [lambda.HttpMethod.POST],
+        allowCredentials: true,
       },
     });
 
@@ -72,6 +88,7 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
       description: 'Manage chat conversations',
+      reservedConcurrentExecutions: 20, // Lightweight operations, allow more concurrency
     });
 
     table.grantReadWriteData(conversationsFn);
@@ -79,9 +96,10 @@ export class BackendStack extends cdk.Stack {
     const conversationsUrl = conversationsFn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
-        allowedOrigins: ['*'],
+        allowedOrigins: allowedOrigins,
         allowedHeaders: ['Authorization', 'Content-Type'],
         allowedMethods: [lambda.HttpMethod.ALL],
+        allowCredentials: true,
       },
     });
 
@@ -94,6 +112,7 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.minutes(10),
       description: 'List and manage Ollama models',
+      reservedConcurrentExecutions: 5, // Heavy operations, limit concurrency
     });
 
     table.grantReadWriteData(modelsFn);
@@ -103,16 +122,17 @@ export class BackendStack extends cdk.Stack {
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ['ec2:DescribeInstances'],
-        resources: ['*'],
+        resources: [instanceArn],
       })
     );
 
     const modelsUrl = modelsFn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
-        allowedOrigins: ['*'],
+        allowedOrigins: allowedOrigins,
         allowedHeaders: ['Authorization', 'Content-Type'],
         allowedMethods: [lambda.HttpMethod.ALL],
+        allowCredentials: true,
       },
     });
 
@@ -125,29 +145,34 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
       description: 'Start/stop EC2 instance',
+      reservedConcurrentExecutions: 5, // EC2 operations, limit concurrency
     });
 
     table.grantReadWriteData(instanceFn);
 
-    // Grant EC2 permissions for instance management
+    // Grant EC2 permissions for instance management (least privilege)
     instanceFn.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: [
-          'ec2:DescribeInstances',
-          'ec2:StartInstances',
-          'ec2:StopInstances',
-        ],
-        resources: ['*'],
+        actions: ['ec2:DescribeInstances'],
+        resources: [instanceArn],
+      })
+    );
+    instanceFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['ec2:StartInstances', 'ec2:StopInstances'],
+        resources: [instanceArn],
       })
     );
 
     const instanceUrl = instanceFn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
-        allowedOrigins: ['*'],
+        allowedOrigins: allowedOrigins,
         allowedHeaders: ['Authorization', 'Content-Type'],
         allowedMethods: [lambda.HttpMethod.ALL],
+        allowCredentials: true,
       },
     });
 
@@ -160,6 +185,7 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.seconds(10),
       description: 'Query AWS cost data',
+      reservedConcurrentExecutions: 10, // Lightweight queries, allow reasonable concurrency
     });
 
     table.grantReadWriteData(costsFn);
@@ -176,9 +202,10 @@ export class BackendStack extends cdk.Stack {
     const costsUrl = costsFn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
-        allowedOrigins: ['*'],
+        allowedOrigins: allowedOrigins,
         allowedHeaders: ['Authorization', 'Content-Type'],
         allowedMethods: [lambda.HttpMethod.ALL],
+        allowCredentials: true,
       },
     });
 
@@ -189,19 +216,27 @@ export class BackendStack extends cdk.Stack {
       code: lambda.Code.fromAsset(backendDist),
       environment: {
         TABLE_NAME: table.tableName,
-        INSTANCE_ID: 'i-077950cffe484e6de',
+        INSTANCE_ID: instanceId,
       },
       memorySize: 128,
       timeout: cdk.Duration.seconds(30),
       description: 'Auto-stop EC2 instance after idle or 1h hard limit',
+      reservedConcurrentExecutions: 1, // Scheduled function, only needs 1
     });
 
     table.grantReadData(autostopFn);
     autostopFn.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: ['ec2:DescribeInstances', 'ec2:StopInstances'],
-        resources: ['*'],
+        actions: ['ec2:DescribeInstances'],
+        resources: [instanceArn],
+      })
+    );
+    autostopFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['ec2:StopInstances'],
+        resources: [instanceArn],
       })
     );
 
@@ -220,6 +255,7 @@ export class BackendStack extends cdk.Stack {
       memorySize: 256,
       timeout: cdk.Duration.seconds(30),
       description: 'Admin functions for cross-user moderation',
+      reservedConcurrentExecutions: 5, // Admin operations are infrequent
     });
 
     table.grantReadWriteData(adminFn);
@@ -227,7 +263,7 @@ export class BackendStack extends cdk.Stack {
     const adminUrl = adminFn.addFunctionUrl({
       authType: lambda.FunctionUrlAuthType.NONE,
       cors: {
-        allowedOrigins: ['*'],
+        allowedOrigins: allowedOrigins,
         allowedHeaders: [
           'Authorization',
           'Content-Type',
@@ -236,6 +272,7 @@ export class BackendStack extends cdk.Stack {
           'X-Requested-With',
         ],
         allowedMethods: [lambda.HttpMethod.GET, lambda.HttpMethod.POST, lambda.HttpMethod.DELETE],
+        allowCredentials: true,
         maxAge: cdk.Duration.seconds(300),
       },
     });

@@ -1,12 +1,20 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getAuthUser } from '../lib/auth.js';
+import { checkRateLimit, createRateLimitResponse } from '../lib/rateLimit.js';
 import { getOllamaUrl } from '../lib/ec2.js';
 import { listModels, pullModel, deleteModel } from '../lib/ollama.js';
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
   try {
     // Verify authentication
-    await getAuthUser(event);
+    const user = await getAuthUser(event);
+
+    // Check rate limit
+    const rateLimit = await checkRateLimit(user.sub, 'models');
+    if (!rateLimit.allowed) {
+      return createRateLimitResponse(rateLimit);
+    }
+
     const method = event.requestContext.http.method;
 
     // Get Ollama URL

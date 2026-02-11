@@ -1,5 +1,6 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { requireAdmin } from '../lib/auth.js';
+import { checkRateLimit, createRateLimitResponse } from '../lib/rateLimit.js';
 import {
   getAllConversationsWithUsers,
   getMessagesAdmin,
@@ -23,7 +24,13 @@ export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGateway
 
   try {
     // Verify admin access
-    await requireAdmin(event);
+    const user = await requireAdmin(event);
+
+    // Check rate limit
+    const rateLimit = await checkRateLimit(user.sub, 'admin');
+    if (!rateLimit.allowed) {
+      return createRateLimitResponse(rateLimit);
+    }
 
     const queryParams = event.queryStringParameters || {};
 

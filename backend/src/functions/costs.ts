@@ -1,13 +1,20 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { CostExplorerClient, GetCostAndUsageCommand } from '@aws-sdk/client-cost-explorer';
 import { getAuthUser } from '../lib/auth.js';
+import { checkRateLimit, createRateLimitResponse } from '../lib/rateLimit.js';
 
 const client = new CostExplorerClient({ region: 'us-east-1' });
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
   try {
     // Verify authentication
-    await getAuthUser(event);
+    const user = await getAuthUser(event);
+
+    // Check rate limit
+    const rateLimit = await checkRateLimit(user.sub, 'costs');
+    if (!rateLimit.allowed) {
+      return createRateLimitResponse(rateLimit);
+    }
 
     const today = new Date();
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);

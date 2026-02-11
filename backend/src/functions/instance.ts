@@ -1,12 +1,20 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { getAuthUser } from '../lib/auth.js';
+import { checkRateLimit, createRateLimitResponse } from '../lib/rateLimit.js';
 import { getInstanceStatus, startInstance, stopInstance, checkOllamaReady } from '../lib/ec2.js';
 import { updateHeartbeat } from '../lib/dynamodb.js';
 
 export const handler = async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
   try {
     // Verify authentication
-    await getAuthUser(event);
+    const user = await getAuthUser(event);
+
+    // Check rate limit
+    const rateLimit = await checkRateLimit(user.sub, 'instance');
+    if (!rateLimit.allowed) {
+      return createRateLimitResponse(rateLimit);
+    }
+
     const method = event.requestContext.http.method;
 
     // GET - Get instance status

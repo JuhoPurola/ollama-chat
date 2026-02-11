@@ -2,7 +2,10 @@ import { getAuthUser } from '../lib/auth.js';
 import { getOllamaUrl } from '../lib/ec2.js';
 import { chatStream } from '../lib/ollama.js';
 import { putConversation, putMessage } from '../lib/dynamodb.js';
+import { ChatRequestSchema, createValidationErrorResponse } from '../lib/validation.js';
+import { checkRateLimit, createRateLimitResponse } from '../lib/rateLimit.js';
 import type { ChatRequest } from '../types.js';
+import { ZodError } from 'zod';
 
 declare const awslambda: {
   streamifyResponse(handler: (event: any, responseStream: any, context: any) => Promise<void>): any;
@@ -28,20 +31,45 @@ export const handler = awslambda.streamifyResponse(
     try {
       // Verify authentication
       const user = await getAuthUser(event);
-      
-      // Parse request body
-      const body: ChatRequest = JSON.parse(event.body || '{}');
-      const { conversationId, model, messages } = body;
 
-      if (!model || !messages || messages.length === 0) {
+      // Check rate limit
+      const rateLimit = await checkRateLimit(user.sub, 'chat');
+      if (!rateLimit.allowed) {
+        const rateLimitError = createRateLimitResponse(rateLimit);
         httpStream.write(
-          `data: ${JSON.stringify({ error: 'Missing required fields: model and messages' })}
+          `data: ${JSON.stringify({ error: rateLimitError.body })}
 
 `
         );
         httpStream.end();
         return;
       }
+
+      // Parse and validate request body
+      let body: ChatRequest;
+      try {
+        const parsed = JSON.parse(event.body || '{}');
+        body = ChatRequestSchema.parse(parsed);
+      } catch (error) {
+        if (error instanceof ZodError) {
+          const errorResponse = createValidationErrorResponse(error);
+          httpStream.write(
+            `data: ${JSON.stringify({ error: 'Validation failed', details: errorResponse.body })}
+
+`
+          );
+        } else {
+          httpStream.write(
+            `data: ${JSON.stringify({ error: 'Invalid JSON in request body' })}
+
+`
+          );
+        }
+        httpStream.end();
+        return;
+      }
+
+      const { conversationId, model, messages } = body;
 
       // Get Ollama URL
       const ollamaUrl = await getOllamaUrl();

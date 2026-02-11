@@ -19,6 +19,15 @@ export class FrontendStack extends cdk.Stack {
 
     const { functionUrls } = props;
 
+    // Get Auth0 configuration from CDK context
+    const auth0Domain = this.node.tryGetContext('auth0Domain') || process.env.AUTH0_DOMAIN;
+    const auth0ClientId = this.node.tryGetContext('auth0ClientId') || process.env.AUTH0_CLIENT_ID;
+    const auth0Audience = this.node.tryGetContext('auth0Audience') || process.env.AUTH0_AUDIENCE;
+
+    if (!auth0Domain || !auth0ClientId || !auth0Audience) {
+      throw new Error('Missing Auth0 configuration. Set in cdk.json context or environment variables.');
+    }
+
     // Create S3 bucket for hosting
     const bucket = new s3.Bucket(this, 'FrontendBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -38,6 +47,61 @@ export class FrontendStack extends cdk.Stack {
     // Grant read permissions to CloudFront
     bucket.grantRead(originAccessIdentity);
 
+    // Build CSP connect-src with actual Lambda URLs
+    const lambdaUrls = Object.values(functionUrls).map(url => url.url);
+    const connectSrc = [
+      "'self'",
+      'https://*.auth0.com',
+      'https://*.lambda-url.eu-west-1.on.aws', // All Lambda URLs in eu-west-1
+      ...lambdaUrls // Include specific URLs as backup
+    ].join(' ');
+
+    // Create security headers policy
+    const securityHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'SecurityHeadersPolicy',
+      {
+        comment: 'Security headers for Ollama Chat',
+        securityHeadersBehavior: {
+          contentSecurityPolicy: {
+            contentSecurityPolicy:
+              "default-src 'self'; " +
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " + // React requires unsafe-eval
+              "style-src 'self' 'unsafe-inline'; " + // Tailwind requires unsafe-inline
+              "img-src 'self' data: https:; " +
+              "font-src 'self' data:; " +
+              `connect-src ${connectSrc}; ` +
+              "frame-ancestors 'none'; " +
+              "base-uri 'self'; " +
+              "form-action 'self'",
+            override: true,
+          },
+          strictTransportSecurity: {
+            accessControlMaxAge: cdk.Duration.seconds(63072000), // 2 years
+            includeSubdomains: true,
+            preload: true,
+            override: true,
+          },
+          contentTypeOptions: {
+            override: true,
+          },
+          frameOptions: {
+            frameOption: cloudfront.HeadersFrameOption.DENY,
+            override: true,
+          },
+          xssProtection: {
+            protection: true,
+            modeBlock: true,
+            override: true,
+          },
+          referrerPolicy: {
+            referrerPolicy: cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+            override: true,
+          },
+        },
+      }
+    );
+
     // Create CloudFront distribution
     const distribution = new cloudfront.Distribution(this, 'Distribution', {
       defaultBehavior: {
@@ -49,6 +113,7 @@ export class FrontendStack extends cdk.Stack {
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
         compress: true,
+        responseHeadersPolicy: securityHeadersPolicy,
       },
       defaultRootObject: 'index.html',
       errorResponses: [
@@ -83,9 +148,9 @@ export class FrontendStack extends cdk.Stack {
             admin: functionUrls.admin.url,
           },
           auth0: {
-            domain: 'ollama-purolaj.eu.auth0.com',
-            clientId: '4mGFHdykQXumUQLD1BFU7ZmjrYQM3Rx5',
-            audience: 'ollama-chat-api',
+            domain: auth0Domain,
+            clientId: auth0ClientId,
+            audience: auth0Audience,
           },
         }),
       ],
