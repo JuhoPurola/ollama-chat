@@ -9,6 +9,7 @@
     "instanceId": "i-xxxxxxxxxxxxx",
     "adminEmails": "your-admin@email.com",
     "budgetEmail": "your-email@email.com",
-    "monthlyBudgetUsd": "10"
+    "monthlyBudgetUsd": "10",
+    "cloudFrontUrl": ""
   }
 }
